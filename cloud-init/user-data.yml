@@ -1,0 +1,155 @@
+#cloud-config
+# =============================================================================
+# OrbStack 隔離マシン用 cloud-init 設定 (cloud-config 形式)
+#
+# 用途: npm / pip などの untrusted な依存関係や postinstall スクリプトを
+#       Mac から隔離された Linux 環境で安全に実行するための開発環境を構築する。
+#
+# 使い方:
+#   orb create --isolated ubuntu sandbox -c cloud-init/user-data.yml
+#
+# 構成:
+#   - システム全体ツール … cloud-init の boot 時 (root) に導入
+#       neovim (apt), AWS CLI v2 (公式zip, アーキ自動判定)
+#   - ユーザー固有ツール … 初回ログイン時にログインユーザー自身で導入
+#       Volta, Node/npm (Volta経由), Claude Code (公式installer), Kiro CLI (zip)
+#
+#   ※ OrbStack は cloud-init の後に「macOSユーザー名のユーザー」を作成するため、
+#      runcmd(=boot時/root) では対象ユーザーがまだ存在しない。そこでユーザー固有
+#      ツールは /etc/profile.d 経由の「初回ログイン時プロビジョニング」で導入する。
+#
+# 注意: このファイルは平文で保存される。トークンや秘密鍵など機密情報は
+#       書き込まないこと（README の「機密情報の扱い」参照）。
+# =============================================================================
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - git
+  - curl
+  - wget
+  - ca-certificates
+  - build-essential
+  - unzip
+  - jq
+  - neovim
+  - ncurses-bin
+
+write_files:
+  # --- 初回ログイン時にユーザー固有ツールを導入する本体 --------------------
+  - path: /usr/local/sbin/user-setup.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      # ログインユーザー自身として実行され、開発ツールを ~/ 配下に導入する。
+      set -euo pipefail
+      MARKER="$HOME/.sandbox-provisioned"
+      LOG="$HOME/.sandbox-setup.log"
+      exec > >(tee -a "$LOG") 2>&1
+      echo "[sandbox] $(date -Is) provisioning user tools for $(whoami)"
+
+      # Volta（curl|bash でユーザーの shell 設定に PATH も追記される）
+      export VOLTA_HOME="$HOME/.volta"
+      if [ ! -x "$VOLTA_HOME/bin/volta" ]; then
+        curl -fsSL https://get.volta.sh | bash
+      fi
+      export PATH="$VOLTA_HOME/bin:$PATH"
+
+      # Node / npm は Volta 経由で導入
+      volta install node
+      volta install npm
+
+      # Claude Code（公式ネイティブインストーラ -> ~/.local/bin）
+      curl -fsSL https://claude.ai/install.sh | bash
+
+      # Kiro CLI（zip インストーラ -> ~/.local/bin。.deb は amd64 専用のため zip を使う）
+      case "$(uname -m)" in
+        aarch64|arm64) KARCH=aarch64 ;;
+        x86_64|amd64)  KARCH=x86_64 ;;
+        *)             KARCH="$(uname -m)" ;;
+      esac
+      # glibc >= 2.34 は標準版、未満は musl 版
+      KSUFFIX=""
+      GLIBC="$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+      if [ -n "$GLIBC" ] && [ "$(printf '%s\n2.34\n' "$GLIBC" | sort -V | head -1)" != "2.34" ]; then
+        KSUFFIX="-musl"
+      fi
+      ktmp="$(mktemp -d)"
+      curl --proto '=https' --tlsv1.2 -sSf \
+        "https://desktop-release.q.us-east-1.amazonaws.com/latest/kirocli-${KARCH}-linux${KSUFFIX}.zip" \
+        -o "$ktmp/kirocli.zip"
+      unzip -q "$ktmp/kirocli.zip" -d "$ktmp"
+      "$ktmp/kirocli/install.sh" --no-confirm
+      rm -rf "$ktmp"
+
+      # 今後のシェルで ~/.local/bin を PATH に通す
+      if ! grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+      fi
+
+      # npm の postinstall を既定で無効化（信頼するパッケージだけ個別に許可する）
+      printf 'ignore-scripts=true\nfund=false\n' > "$HOME/.npmrc"
+
+      # git-secrets をグローバルに有効化（今後 clone/init するリポジトリすべてで pre-commit チェック）
+      if command -v git-secrets >/dev/null 2>&1; then
+        git secrets --register-aws --global
+        git secrets --add 'private_key' --global || true       # GCP
+        git secrets --add 'private_key_id' --global || true    # GCP
+        git secrets --install -f "$HOME/.git-templates/git-secrets"
+        git config --global init.templateDir "$HOME/.git-templates/git-secrets"
+      fi
+
+      # neovim 設定（dotfiles を一方向 clone。プラグインは初回起動時に Linux 用へ入る）
+      # ※ public リポジトリのため HTTPS で認証不要。設定の改変は Mac 側リポジトリ経由のみ。
+      if [ ! -e "$HOME/.config/nvim" ]; then
+        mkdir -p "$HOME/.config"
+        git clone --depth 1 https://github.com/bigdragon0610/nvim-config.git "$HOME/.config/nvim" || \
+          echo "[sandbox] nvim-config clone failed (skipped)"
+      fi
+
+      touch "$MARKER"
+      echo "[sandbox] done. open a new shell or run 'source ~/.bashrc' to use the tools."
+
+  # --- 初回ログイン時に上記を 1 回だけ走らせるフック ----------------------
+  - path: /etc/profile.d/zz-sandbox-setup.sh
+    permissions: '0644'
+    content: |
+      # 初回ログイン時にユーザー固有ツールを導入する（root と導入済みユーザーは除外）
+      if [ "$(id -u)" != "0" ] && [ -n "$HOME" ] \
+         && [ ! -f "$HOME/.sandbox-provisioned" ] \
+         && [ -x /usr/local/sbin/user-setup.sh ]; then
+        /usr/local/sbin/user-setup.sh || echo "[sandbox] user-setup failed; see ~/.sandbox-setup.log"
+      fi
+
+  # --- boot 時 (root) に走らせるシステム全体プロビジョニング --------------
+  - path: /usr/local/sbin/system-setup.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euxo pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      # AWS CLI v2（アーキ自動判定 -> /usr/local/bin/aws）
+      case "$(uname -m)" in
+        aarch64|arm64) AWS_ARCH=aarch64 ;;
+        x86_64|amd64)  AWS_ARCH=x86_64 ;;
+        *)             AWS_ARCH="$(uname -m)" ;;
+      esac
+      awstmp="$(mktemp -d)"
+      curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip" -o "$awstmp/awscliv2.zip"
+      unzip -q "$awstmp/awscliv2.zip" -d "$awstmp"
+      "$awstmp/aws/install" --update
+      rm -rf "$awstmp"
+
+      # git-secrets（AWS謹製。コミット前に認証情報の混入を検知する。make install で /usr/local/bin へ）
+      gtmp="$(mktemp -d)"
+      git clone --depth 1 https://github.com/awslabs/git-secrets.git "$gtmp/git-secrets"
+      make -C "$gtmp/git-secrets" install
+      rm -rf "$gtmp"
+
+      touch /etc/cloud-init-done
+
+runcmd:
+  - /usr/local/sbin/system-setup.sh
+
+final_message: "OrbStack isolated sandbox is ready after $UPTIME seconds. Per-user tools install on first login."

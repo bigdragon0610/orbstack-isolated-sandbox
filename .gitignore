@@ -1,0 +1,6 @@
+# macOS
+.DS_Store
+
+# ローカル専用の cloud-init（機密情報を含む可能性があるもの）
+cloud-init/*.local.yml
+*.secret.yml

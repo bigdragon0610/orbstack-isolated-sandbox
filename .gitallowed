@@ -1,0 +1,4 @@
+# git-secrets の誤検知許可リスト。
+# 下記は実際の鍵ではなく、git-secrets の GCP パターン名（設定コマンドの一部）。
+git secrets --add 'private_key'
+git secrets --add 'private_key_id'
