@@ -93,6 +93,18 @@ orb -m sandbox -- bash -lc 'test -f ~/.sandbox-provisioned && echo user-provisio
 orb delete sandbox
 ```
 
+> [!WARNING]
+> cloud-init やスクリプトの**動作確認（e2e テスト）は、作業中の `sandbox` ではなく必ず別名マシンで行う**こと。検証では `orb delete` → 再作成を繰り返すため、同名だと作業中の環境を消してしまう。
+>
+> ```bash
+> # 使い捨ての検証用マシンを作成・確認・破棄する
+> ./create-machine.sh sandbox-test
+> # ... 動作確認 ...
+> orb delete -f sandbox-test
+> ```
+>
+> 作業用の `sandbox` には触れない。
+
 ## 必要なフォルダだけマウントする
 
 隔離マシンは既定では Mac のファイルを一切共有しない。**特定のフォルダだけ**を選択的に共有できる。
