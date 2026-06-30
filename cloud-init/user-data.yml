@@ -108,6 +108,25 @@ write_files:
           echo "[sandbox] nvim-config clone failed (skipped)"
       fi
 
+      # neovim クリップボード（サンドボックス専用・OSC52 コピーのみ）。
+      # 共有 dotfiles (~/.config/nvim) は変更せず、runtimepath 上の別ディレクトリに
+      # ユーザー設定の「後」に読まれる上書きを置く。ペーストは端末クリップボードを
+      # 読まず直近ヤンクを返す（クリップボード漏洩・読み取りプロンプト・ハングを回避）。
+      mkdir -p "$HOME/.local/share/nvim/site/after/plugin"
+      cat > "$HOME/.local/share/nvim/site/after/plugin/zz-sandbox-clipboard.lua" <<'LUAEOF'
+      local ok, osc52 = pcall(require, "vim.ui.clipboard.osc52")
+      if ok then
+      vim.g.clipboard = {
+      name = "OSC 52 (sandbox, copy-only)",
+      copy = { ["+"] = osc52.copy("+"), ["*"] = osc52.copy("*") },
+      paste = {
+      ["+"] = function() return vim.split(vim.fn.getreg(""), "\n") end,
+      ["*"] = function() return vim.split(vim.fn.getreg(""), "\n") end,
+      },
+      }
+      end
+      LUAEOF
+
       touch "$MARKER"
       echo "[sandbox] done. open a new shell or run 'source ~/.bashrc' to use the tools."
 
@@ -121,6 +140,15 @@ write_files:
          && [ -x /usr/local/sbin/user-setup.sh ]; then
         /usr/local/sbin/user-setup.sh || echo "[sandbox] user-setup failed; see ~/.sandbox-setup.log"
       fi
+
+  # --- Mac から漏れてきた無効な X11 DISPLAY を掃除（隔離マシンに X サーバは無い）---
+  - path: /etc/profile.d/zz-clean-display.sh
+    permissions: '0644'
+    content: |
+      # 転送された XQuartz の DISPLAY は VM 内で無効。残ると xclip 等が誤作動するため外す
+      case "${DISPLAY:-}" in
+        */org.xquartz:*|/private/tmp/*|/tmp/com.apple.*) unset DISPLAY ;;
+      esac
 
   # --- boot 時 (root) に走らせるシステム全体プロビジョニング --------------
   - path: /usr/local/sbin/system-setup.sh
