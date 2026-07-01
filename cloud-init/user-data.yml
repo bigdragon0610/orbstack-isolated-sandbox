@@ -128,13 +128,13 @@ write_files:
       LUAEOF
 
       # neovim サンドボックス識別（サンドボックス専用・共有 dotfiles は変更しない）。
-      # mini.statusline のハイライト群を赤系へ上書きし、隔離環境だと一目で分かるようにする。
+      # mini.statusline のハイライト群を青系へ上書きし、隔離環境だと一目で分かるようにする。
       # colorscheme 変更で塗り直されるため ColorScheme イベントでも再適用する。
       cat > "$HOME/.local/share/nvim/site/after/plugin/zz-sandbox-ui.lua" <<'LUAEOF'
       local function paint()
-      local mode = { bg = "#7a1f1f", fg = "#ffffff", bold = true }
-      local mid  = { bg = "#5a1818", fg = "#ffdddd" }
-      local off  = { bg = "#3a1414", fg = "#ffcccc" }
+      local mode = { bg = "#1f6feb", fg = "#ffffff", bold = true }
+      local mid  = { bg = "#0b2545", fg = "#cfe3ff" }
+      local off  = { bg = "#06192e", fg = "#9fb8d8" }
       for _, g in ipairs({
       "MiniStatuslineModeNormal", "MiniStatuslineModeInsert",
       "MiniStatuslineModeVisual", "MiniStatuslineModeReplace",
@@ -176,7 +176,7 @@ write_files:
         */org.xquartz:*|/private/tmp/*|/tmp/com.apple.*) unset DISPLAY ;;
       esac
 
-  # --- サンドボックス識別: 端末背景をうっすら赤に染めて隔離環境だと一目で分かるようにする ---
+  # --- サンドボックス識別: 端末背景を紺(PowerShell 風)に染めて隔離環境だと一目で分かるようにする ---
   - path: /etc/profile.d/zz-sandbox-color.sh
     permissions: '0644'
     content: |
@@ -185,7 +185,7 @@ write_files:
       case "$-" in
         *i*)
           if [ -t 1 ]; then
-            printf '\033]11;#2a1414\a'
+            printf '\033]11;#012456\a'
             trap 'printf "\033]111\a"' EXIT
           fi
           ;;
