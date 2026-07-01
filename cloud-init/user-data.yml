@@ -132,9 +132,9 @@ write_files:
       # colorscheme 変更で塗り直されるため ColorScheme イベントでも再適用する。
       cat > "$HOME/.local/share/nvim/site/after/plugin/zz-sandbox-ui.lua" <<'LUAEOF'
       local function paint()
-      local mode = { bg = "#1f6feb", fg = "#ffffff", bold = true }
-      local mid  = { bg = "#0b2545", fg = "#cfe3ff" }
-      local off  = { bg = "#06192e", fg = "#9fb8d8" }
+      local mode = { bg = "#3a5573", fg = "#e6edf3", bold = true }
+      local mid  = { bg = "#1c2a3a", fg = "#b8c6d6" }
+      local off  = { bg = "#131b26", fg = "#8a9bb0" }
       for _, g in ipairs({
       "MiniStatuslineModeNormal", "MiniStatuslineModeInsert",
       "MiniStatuslineModeVisual", "MiniStatuslineModeReplace",
@@ -185,7 +185,7 @@ write_files:
       case "$-" in
         *i*)
           if [ -t 1 ]; then
-            printf '\033]11;#012456\a'
+            printf '\033]11;#16202b\a'
             trap 'printf "\033]111\a"' EXIT
           fi
           ;;
