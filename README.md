@@ -11,11 +11,14 @@ OrbStack の通常マシンは Mac のファイルシステム (`/mnt/mac`)・SS
 隔離マシンは以下を**既定で遮断**する:
 
 - Mac のファイルシステムをマウントしない (`/mnt/mac` なし)
-- macOS ホストへネットワーク到達不可・`mac` コマンド不可
+- `mac` コマンドで macOS 側のコマンドを実行できない
 - SSH エージェントのフォワーディングをしない
 - USB / シリアル / サウンドのパススルーをしない
 
 ただしインターネットアクセス、`*.orb.local` ドメイン、Mac からの SSH / `orb` アクセスは引き続き使える。
+
+> [!IMPORTANT]
+> `--isolated` は**ネットワークを隔離しない**。サンドボックスから Mac の待ち受けポート・LAN・他の OrbStack マシンへは TCP 接続できる。遮断するには `--isolate-network` が別途必要（[ネットワーク隔離](#ネットワーク隔離--isolate-network) 参照）。
 
 > [!WARNING]
 > 隔離マシンはリスクを下げるが**完全なセキュリティ境界ではない**。全マシン／コンテナは OrbStack の単一 Linux VM 上でカーネルを共有しており、隔離は Linux カーネルのセキュリティモデルに依存する。日常的な untrusted コード（サードパーティ依存や AI エージェント）には十分だが、**カーネルを能動的に攻撃するマルウェア解析には使わないこと**。その場合は独自カーネルを持つフル VM を使う。
@@ -216,8 +219,47 @@ docker compose version
 
 稼働中のマシンへ後から入れる場合は [Docker 公式手順](https://docs.docker.com/engine/install/ubuntu/) を実行したうえで `sudo usermod -aG docker "$USER"` する。
 
-> [!WARNING]
-> `docker` グループはパスワードなしの root 相当。コンテナからホスト（＝サンドボックス）のファイルシステムをマウントできるため、**サンドボックス内の隔離を弱める**。ただし Mac との境界（隔離マシンの境界）は保たれるため、untrusted コードを Mac から遠ざけるという本リポジトリの目的自体は変わらない。サンドボックス内でさらに untrusted コードを閉じ込めたい場合は、`docker` グループを使わず rootless Docker（`dockerd-rootless-setuptool.sh install`、`docker-ce-rootless-extras` 導入済み）を検討する。
+### Docker と隔離の関係
+
+`docker` グループはパスワードなしの root 相当で、`docker run -v /:/host` でサンドボックスの全ファイルを読み書きできる。ただし **本リポジトリの構成では新たな権限の獲得にはならない**。OrbStack が作るログインユーザーは元々パスワードなし `sudo` を持っており（`sudo -n true` が通る）、サンドボックス内で動く untrusted コードは Docker の有無にかかわらず root になれるため。
+
+Mac との境界も Docker では変わらない。コンテナはサンドボックスの入れ子であり、サンドボックスに無いものへは到達できない。
+
+- Mac のファイルはマウントされていない（`mounts` 未設定・`/mnt/mac` 無し）ため、コンテナへ渡せる Mac のファイルが存在しない
+- `SSH_AUTH_SOCK` は未設定、`mac` コマンドは `dial: no such file or directory` で失敗する
+- `/var/run/docker.sock` はこのマシンの dockerd 自身のもの。Mac の Docker Desktop / OrbStack Docker への橋渡しは無い
+
+サンドボックス内でさらに untrusted コードを閉じ込めたい（root 化そのものを避けたい）場合は、パスワードなし sudo を外したうえで rootless Docker（`docker-ce-rootless-extras` 導入済み、`dockerd-rootless-setuptool.sh install`）を使う。
+
+Docker と無関係に残るリスクは冒頭の警告のとおりで、全マシンが OrbStack の単一 Linux VM でカーネルを共有している点と、次節のネットワーク到達性である。
+
+## ネットワーク隔離（`--isolate-network`）
+
+`--isolated` だけではネットワークは隔離されない。ファイル共有・SSH エージェント転送・`mac` コマンドは無効になるが、**サンドボックスは Mac・LAN・他の OrbStack マシンへ TCP 接続できる**。`--isolate-network` を付けて初めてこれらが遮断される（インターネットは維持）。
+
+実測（`isolate_network: false` のサンドボックスから）:
+
+| 宛先 | 結果 |
+| --- | --- |
+| Mac の待ち受けポート（`host.docker.internal` = `0.250.250.254`、および LAN IP） | 接続成功 |
+| LAN のルータ `192.168.3.1:80`（管理画面） | 接続成功 |
+| 他の OrbStack マシン（`ubuntu.orb.local` として名前解決も可能） | 到達可能 |
+
+これが問題になるのは次のような場合。
+
+- **Mac 上のローカルサービスへの到達**: `0.0.0.0` で待ち受けている開発用 API・DB（Postgres / MySQL / Redis）・Ollama・Jupyter などは「localhost だから」と無認証で動かしがちで、そこへ直接届く。`127.0.0.1` のみに bind したものは到達できない。
+- **非隔離マシンを踏み台にした Mac ファイルへの到達**: 隔離していない OrbStack マシンは `/mnt/mac` で Mac のホームを持つ。そこに認証の弱いサービスが動いていれば、サンドボックスから乗り移って Mac のファイルへ届きうる。**隔離マシンから Mac へ至る現実的な唯一の経路がこれ**。
+- **LAN 内の他機器への横展開**: ルータ管理画面・NAS・プリンタ・社内イントラに対する既定パスワードの試行やスキャン。
+- **macOS 自体のサービス**: AirPlay / Handoff 系（5000 / 7000 / rapportd）などが攻撃面として露出する。
+
+一方、`--isolate-network` を付けても**インターネットへは出られる**ため、機密情報の外部送信は防げない。防げるのは横方向の到達であって持ち出しではない。
+
+既存マシンにも後から設定でき、再起動で反映される。
+
+```bash
+orb config set machine.sandbox.isolate_network true
+orb restart sandbox
+```
 
 ## 導入後の認証
 
