@@ -11,11 +11,14 @@ OrbStack の通常マシンは Mac のファイルシステム (`/mnt/mac`)・SS
 隔離マシンは以下を**既定で遮断**する:
 
 - Mac のファイルシステムをマウントしない (`/mnt/mac` なし)
-- macOS ホストへネットワーク到達不可・`mac` コマンド不可
+- `mac` コマンドで macOS 側のコマンドを実行できない
 - SSH エージェントのフォワーディングをしない
 - USB / シリアル / サウンドのパススルーをしない
 
 ただしインターネットアクセス、`*.orb.local` ドメイン、Mac からの SSH / `orb` アクセスは引き続き使える。
+
+> [!IMPORTANT]
+> `--isolated` は**ネットワークを隔離しない**。サンドボックスから Mac の待ち受けポート・LAN・他の OrbStack マシンへは TCP 接続できる。`--isolate-network` を足しても塞がるのは OrbStack 内部の host 経路だけで、物理 LAN と他マシンへの到達は残る（[ネットワーク隔離](#ネットワーク隔離--isolate-network) 参照）。
 
 > [!WARNING]
 > 隔離マシンはリスクを下げるが**完全なセキュリティ境界ではない**。全マシン／コンテナは OrbStack の単一 Linux VM 上でカーネルを共有しており、隔離は Linux カーネルのセキュリティモデルに依存する。日常的な untrusted コード（サードパーティ依存や AI エージェント）には十分だが、**カーネルを能動的に攻撃するマルウェア解析には使わないこと**。その場合は独自カーネルを持つフル VM を使う。
@@ -58,7 +61,7 @@ GUI の場合は、マシン作成時に **Isolate machine** をオンにする�
 
 ### 2. ネットワークも隔離したい場合（任意）
 
-他の OrbStack マシンやホスト IP もブロックしつつインターネットは維持する:
+OrbStack 内部の host 経路をブロックしつつインターネットは維持する（物理 LAN と他マシンへの到達は残る。[ネットワーク隔離](#ネットワーク隔離--isolate-network) 参照）:
 
 ```bash
 orb create --isolated --isolate-network ubuntu sandbox -c cloud-init/user-data.yml
@@ -201,6 +204,90 @@ infocmp -x "$TERM" | orb run -m sandbox tic -x -
 - AWS EC2 など他のクラウドと同じ user-data 形式が使えるため、本番デプロイ前のローカル検証にも流用できる。
 
 詳細は [OrbStack Cloud-init ドキュメント](https://docs.orbstack.dev/machines/cloud-init) および [cloud-init 公式ドキュメント](https://cloudinit.readthedocs.io/en/latest/) を参照。
+
+## Docker
+
+サンドボックス内に **Docker Engine**（+ Compose / Buildx プラグイン）を公式 apt リポジトリから導入する。Mac 側の Docker Desktop や OrbStack の Docker とは別インスタンスで、イメージもコンテナもこのマシン内で完結する。
+
+```bash
+orb -m sandbox
+docker run --rm hello-world
+docker compose version
+```
+
+`docker` グループへの追加は初回ログイン時に行うため、**そのログインセッションではまだ反映されない**（次回ログインから `sudo` なしで使える）。すぐ使いたい場合は `sudo docker ...` か再ログインする。
+
+稼働中のマシンへ後から入れる場合は [Docker 公式手順](https://docs.docker.com/engine/install/ubuntu/) を実行したうえで `sudo usermod -aG docker "$USER"` する。
+
+### Docker と隔離の関係
+
+`docker` グループはパスワードなしの root 相当で、`docker run -v /:/host` でサンドボックスの全ファイルを読み書きできる。ただし **本リポジトリの構成では新たな権限の獲得にはならない**。OrbStack が作るログインユーザーは元々パスワードなし `sudo` を持っており（`sudo -n true` が通る）、サンドボックス内で動く untrusted コードは Docker の有無にかかわらず root になれるため。
+
+Mac との境界も Docker では変わらない。コンテナはサンドボックスの入れ子であり、サンドボックスに無いものへは到達できない。
+
+- Mac のファイルはマウントされていない（`mounts` 未設定・`/mnt/mac` 無し）ため、コンテナへ渡せる Mac のファイルが存在しない
+- `SSH_AUTH_SOCK` は未設定、`mac` コマンドは `dial: no such file or directory` で失敗する
+- `/var/run/docker.sock` はこのマシンの dockerd 自身のもの。Mac の Docker Desktop / OrbStack Docker への橋渡しは無い
+
+サンドボックス内でさらに untrusted コードを閉じ込めたい（root 化そのものを避けたい）場合は、パスワードなし sudo を外したうえで rootless Docker（`docker-ce-rootless-extras` 導入済み、`dockerd-rootless-setuptool.sh install`）を使う。
+
+Docker と無関係に残るリスクは冒頭の警告のとおりで、全マシンが OrbStack の単一 Linux VM でカーネルを共有している点と、次節のネットワーク到達性である。
+
+## ネットワーク隔離（`--isolate-network`）
+
+`--isolated` だけではネットワークは隔離されない。ファイル共有・SSH エージェント転送・`mac` コマンドは無効になるが、**サンドボックスは Mac・LAN・他の OrbStack マシンへ TCP 接続できる**。`--isolate-network` を足すと一部が遮断されるが、**すべてではない**。
+
+既存マシンにも後から設定でき、再起動で反映される。
+
+```bash
+orb config set machine.sandbox.isolate_network true
+orb restart sandbox
+```
+
+### 実測: 何が塞がり、何が塞がらないか
+
+サンドボックスから外向きに接続した結果（OrbStack v2.2.1）:
+
+| 宛先 | `isolate_network: false` | `true` |
+| --- | --- | --- |
+| インターネット | 到達可 | 到達可（維持） |
+| Mac（OrbStack の host 経路 `0.250.250.254` = `host.docker.internal`） | 接続成功 | **遮断** |
+| Mac（物理 LAN 側の IP。例 `192.168.3.38:5000`） | 接続成功 | 接続成功（**塞がらない**） |
+| LAN のルータ `192.168.3.1:80`（管理画面） | 接続成功 | 接続成功（**塞がらない**） |
+| 他の OrbStack マシン（`192.168.139.x`、`*.orb.local` で名前解決も可） | 到達可能 | 到達可能（**塞がらない**） |
+
+サンドボックス内の Docker コンテナも同じ経路を継承する（コンテナから LAN・他マシンへ到達できることを確認済み）。
+
+> [!WARNING]
+> `--isolate-network` が塞ぐのは OrbStack 内部の host 経路だけで、**物理 LAN 経由の到達と他マシンへの到達は塞がらない**。後述の「踏み台」経路は `--isolate-network` では解決しない。
+
+### 残るリスク
+
+- **非隔離マシンを踏み台にした Mac ファイルへの到達**: 隔離していない OrbStack マシンは `/mnt/mac` で Mac のホーム全体を持つ。サンドボックスからそのマシンへは `--isolate-network` を付けても TCP 接続できるため、相手に認証の弱いサービスが動いていれば乗り移って Mac のファイルへ届きうる。**隔離マシンから Mac のファイルへ至る現実的な経路がこれ**。
+- **LAN 内の他機器への横展開**: ルータ管理画面・NAS・プリンタ・社内イントラに対する既定パスワードの試行やスキャン。
+- **Mac 上のローカルサービスへの到達**: LAN 側 IP に bind した開発用 API・DB（Postgres / MySQL / Redis）・Ollama・Jupyter などは「localhost だから」と無認証で動かしがちで、そこへ直接届く。`127.0.0.1` のみに bind したものは到達できない。
+- **機密情報の持ち出し**: `--isolate-network` を付けてもインターネットへは出られるため、外部送信は防げない。防げるのは横方向の到達であって持ち出しではない。
+
+踏み台と LAN 横展開への対処:
+
+- 非隔離マシンを**使わないときは停止する**（`orb stop <machine>`）。停止中は到達できない。
+- 他のマシンも `--isolated` で作り直し、`/mnt/mac` を持つマシンを無くす。
+- サンドボックス側で外向きを絞る。例えば nftables で他マシン網（`192.168.139.0/24`）と LAN（`192.168.3.0/24`）宛を DROP し、インターネットだけ残す。
+
+### 内向き（Mac → サンドボックス）は影響を受けない
+
+`--isolate-network` が制限するのは**サンドボックスからの外向き**だけで、Mac から入る経路はそのまま使える。実測:
+
+| 経路 | 結果 |
+| --- | --- |
+| `localhost:<port>`（OrbStack のポート転送） | 接続成功 |
+| マシン IP 直指定（`192.168.139.240:<port>`） | 接続成功 |
+| `orb -m sandbox` / `ssh sandbox@orb` | 正常 |
+
+サンドボックス内で x11vnc を動かし Mac の VNC クライアントから `localhost:5900` で繋ぐ、といった使い方は隔離後もそのまま動く。
+
+> [!NOTE]
+> `orb restart` の後、`*.orb.local` が実際のマシン IP と異なるアドレスを返すことがある（これは隔離の有無に関係なく起きる）。その場合は `localhost` へのポート転送か `orb list` で確認したマシン IP を使う。
 
 ## 導入後の認証
 
