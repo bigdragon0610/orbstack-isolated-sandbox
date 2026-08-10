@@ -10,7 +10,8 @@
 #
 # 構成:
 #   - システム全体ツール … cloud-init の boot 時 (root) に導入
-#       neovim (apt), AWS CLI v2 (公式zip, アーキ自動判定)
+#       neovim (apt), AWS CLI v2 (公式zip, アーキ自動判定),
+#       Docker Engine + Compose/Buildx プラグイン (公式 apt リポジトリ)
 #   - ユーザー固有ツール … 初回ログイン時にログインユーザー自身で導入
 #       Volta, Node/npm (Volta経由), Claude Code (公式installer), Kiro CLI (zip)
 #
@@ -90,6 +91,13 @@ write_files:
 
       # npm の postinstall を既定で無効化（信頼するパッケージだけ個別に許可する）
       printf 'ignore-scripts=true\nfund=false\n' > "$HOME/.npmrc"
+
+      # docker グループへ追加（sudo なしで docker を使う）。boot 時点ではこのユーザーが
+      # 存在しないため cloud-init 側では行えず、初回ログイン時にここで行う。
+      # ※ 反映されるのは次回ログインから。今のシェルでは sudo docker を使う。
+      if getent group docker >/dev/null 2>&1; then
+        sudo -n usermod -aG docker "$(whoami)" || echo "[sandbox] failed to add $(whoami) to docker group"
+      fi
 
       # git-secrets をグローバルに有効化（今後 clone/init するリポジトリすべてで pre-commit チェック）
       if command -v git-secrets >/dev/null 2>&1; then
@@ -209,6 +217,18 @@ write_files:
       unzip -q "$awstmp/awscliv2.zip" -d "$awstmp"
       "$awstmp/aws/install" --update
       rm -rf "$awstmp"
+
+      # Docker Engine（公式 apt リポジトリ。Compose / Buildx はプラグインとして同梱）
+      # ※ Mac の Docker Desktop / OrbStack の Docker とは別物で、この隔離マシン内で完結する。
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      . /etc/os-release
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+        > /etc/apt/sources.list.d/docker.list
+      apt-get update -qq
+      apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      systemctl enable --now docker
 
       # git-secrets（AWS謹製。コミット前に認証情報の混入を検知する。make install で /usr/local/bin へ）
       gtmp="$(mktemp -d)"

@@ -202,6 +202,23 @@ infocmp -x "$TERM" | orb run -m sandbox tic -x -
 
 詳細は [OrbStack Cloud-init ドキュメント](https://docs.orbstack.dev/machines/cloud-init) および [cloud-init 公式ドキュメント](https://cloudinit.readthedocs.io/en/latest/) を参照。
 
+## Docker
+
+サンドボックス内に **Docker Engine**（+ Compose / Buildx プラグイン）を公式 apt リポジトリから導入する。Mac 側の Docker Desktop や OrbStack の Docker とは別インスタンスで、イメージもコンテナもこのマシン内で完結する。
+
+```bash
+orb -m sandbox
+docker run --rm hello-world
+docker compose version
+```
+
+`docker` グループへの追加は初回ログイン時に行うため、**そのログインセッションではまだ反映されない**（次回ログインから `sudo` なしで使える）。すぐ使いたい場合は `sudo docker ...` か再ログインする。
+
+稼働中のマシンへ後から入れる場合は [Docker 公式手順](https://docs.docker.com/engine/install/ubuntu/) を実行したうえで `sudo usermod -aG docker "$USER"` する。
+
+> [!WARNING]
+> `docker` グループはパスワードなしの root 相当。コンテナからホスト（＝サンドボックス）のファイルシステムをマウントできるため、**サンドボックス内の隔離を弱める**。ただし Mac との境界（隔離マシンの境界）は保たれるため、untrusted コードを Mac から遠ざけるという本リポジトリの目的自体は変わらない。サンドボックス内でさらに untrusted コードを閉じ込めたい場合は、`docker` グループを使わず rootless Docker（`dockerd-rootless-setuptool.sh install`、`docker-ce-rootless-extras` 導入済み）を検討する。
+
 ## 導入後の認証
 
 ツールは導入されるが、認証・認証情報の設定は手動で行う。
