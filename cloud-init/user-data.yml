@@ -13,7 +13,8 @@
 #       neovim (apt), AWS CLI v2 (公式zip, アーキ自動判定),
 #       Docker Engine + Compose/Buildx プラグイン (公式 apt リポジトリ)
 #   - ユーザー固有ツール … 初回ログイン時にログインユーザー自身で導入
-#       Volta, Node/npm (Volta経由), Claude Code (公式installer), Kiro CLI (zip)
+#       Volta, Node/npm (Volta経由), Claude Code (公式installer), Kiro CLI (zip),
+#       Rust (rustup + rust-analyzer/rust-src)
 #
 #   ※ OrbStack は cloud-init の後に「macOSユーザー名のユーザー」を作成するため、
 #      runcmd(=boot時/root) では対象ユーザーがまだ存在しない。そこでユーザー固有
@@ -83,6 +84,13 @@ write_files:
       unzip -q "$ktmp/kirocli.zip" -d "$ktmp"
       "$ktmp/kirocli/install.sh" --no-confirm
       rm -rf "$ktmp"
+
+      # Rust（rustup -> ~/.cargo。neovim の LSP 補完用に rust-analyzer / rust-src も入れる。
+      # rustup が ~/.bashrc・~/.profile に ~/.cargo/bin の PATH 設定を追記する）
+      if [ ! -x "$HOME/.cargo/bin/rustup" ]; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+          | sh -s -- -y -c rust-analyzer -c rust-src
+      fi
 
       # 今後のシェルで ~/.local/bin を PATH に通す
       if ! grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null; then
