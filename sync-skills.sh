@@ -33,7 +33,9 @@ sync_dir() {
 }
 
 # マシンが起動しているか確認
-if ! orb list 2>/dev/null | grep -qE "^${NAME}[[:space:]]+running"; then
+# grep -q はマッチした時点でパイプを閉じるため orb が SIGPIPE で終了し、pipefail が
+# パイプライン全体を失敗扱いにする（起動中でも 141 で落ちる）。全入力を読み切らせる。
+if ! orb list 2>/dev/null | grep -E "^${NAME}[[:space:]]+running" >/dev/null; then
   echo "error: machine '$NAME' is not running. Start it with: orb start $NAME" >&2
   exit 1
 fi
