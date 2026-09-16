@@ -207,6 +207,39 @@ write_files:
           ;;
       esac
 
+  # --- git リポジトリ内では常にブランチ名をプロンプトへ出す ---------------
+  - path: /etc/profile.d/zz-sandbox-prompt.sh
+    permissions: '0644'
+    content: |
+      # git リポジトリ内では常にブランチ名をプロンプトへ出す。
+      # ~/.bashrc は /etc/profile.d の後に読まれて PS1 を上書きするため、
+      # 共有 dotfiles を書き換えずに済む PROMPT_COMMAND 側で毎回組み立てる。
+      case "$-" in
+        *i*)
+          if [ -n "${BASH_VERSION-}" ]; then
+            __sandbox_git_branch() {
+              local ref
+              ref=$(git symbolic-ref --short HEAD 2>/dev/null) ||
+                ref=$(git rev-parse --short HEAD 2>/dev/null) || return 0
+              printf " [%s]" "$ref"
+            }
+            export -f __sandbox_git_branch 2>/dev/null
+
+            __sandbox_set_ps1() {
+              # 端末タイトルには user@host を残す。ブランチ名は $() のまま置き、
+              # 毎プロンプトで再評価させる（結果は再展開されないためブランチ名は安全）。
+              PS1='\[\e]0;\u@\h: \w\a\]\[\e[01;36m\][\w]\[\e[00m\]\[\e[01;33m\]$(__sandbox_git_branch 2>/dev/null)\[\e[00m\]\n\$ '
+            }
+            case "${PROMPT_COMMAND-}" in
+              *__sandbox_set_ps1*) ;;
+              "") PROMPT_COMMAND="__sandbox_set_ps1" ;;
+              *)  PROMPT_COMMAND="${PROMPT_COMMAND%;};__sandbox_set_ps1" ;;
+            esac
+            export PROMPT_COMMAND
+          fi
+          ;;
+      esac
+
   # --- boot 時 (root) に走らせるシステム全体プロビジョニング --------------
   - path: /usr/local/sbin/system-setup.sh
     permissions: '0755'

@@ -201,6 +201,7 @@ infocmp -x "$TERM" | orb run -m sandbox tic -x -
 - **初回ログイン時 (ログインユーザー)**: `/etc/profile.d/zz-sandbox-setup.sh` が `/usr/local/sbin/user-setup.sh` を 1 回だけ実行し、ユーザー固有ツールを導入する。OrbStack は cloud-init の後にユーザーを作成するため、boot 時点では対象ユーザーが存在せずこの方式を採る。導入済みかは `~/.sandbox-provisioned` で判定し、再ログインでは再実行しない。
 - npm の `postinstall` リスク対策として、ユーザーの `~/.npmrc` に `ignore-scripts=true` を設定する。スクリプト実行が必要な信頼できるパッケージだけ `npm install --foreground-scripts` 等で個別に許可する。
 - **git-secrets**（AWS 謹製）を導入し、AWS/GCP の認証情報がコミットに紛れ込むのを pre-commit で検知する。boot 時に `make install` でシステム全体へ入れ、初回ログイン時に `git secrets --register-aws --global` 等でグローバル有効化＋`init.templateDir` 設定を行うため、以降 `git clone` / `git init` するリポジトリすべてでフックが効く。
+- **git ブランチ表示プロンプト**: `/etc/profile.d/zz-sandbox-prompt.sh` が `PROMPT_COMMAND` でプロンプトを組み立て、git リポジトリ内では常にブランチ名（detached HEAD は短縮 SHA）を `[~/path] [branch]` の形で出す。`~/.bashrc` は `/etc/profile.d/*` の後に読まれて `PS1` を上書きするため、`PS1` 直代入ではなくこの方式を採る（共有 dotfiles は変更しない）。
 - AWS EC2 など他のクラウドと同じ user-data 形式が使えるため、本番デプロイ前のローカル検証にも流用できる。
 
 詳細は [OrbStack Cloud-init ドキュメント](https://docs.orbstack.dev/machines/cloud-init) および [cloud-init 公式ドキュメント](https://cloudinit.readthedocs.io/en/latest/) を参照。
