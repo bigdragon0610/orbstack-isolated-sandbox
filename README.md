@@ -25,7 +25,7 @@ OrbStack の通常マシンは Mac のファイルシステム (`/mnt/mac`)・SS
 
 ## 前提
 
-- OrbStack がインストール済み（`orb version` で確認。本リポジトリは v2.2.1 で確認）
+- OrbStack がインストール済み（`orb version` で確認。本リポジトリは v2.2.3 で確認）
 - `orb` CLI が PATH 上にあること
 
 ## マシンの作成方法
@@ -75,7 +75,7 @@ orb -m sandbox          # シェルに入る
 ssh sandbox@orb         # SSH
 ```
 
-OrbStack は cloud-init の**後**に「macOS ユーザー名のユーザー」を作成する。そのため Volta / Node / npm / Claude Code / Kiro CLI といったユーザー固有ツールは、cloud-init ではなく**初回ログイン時にそのユーザー自身で自動導入**される（ネットワーク経由のダウンロードのため数分かかる）。neovim と AWS CLI は cloud-init の boot 時にシステム全体へ導入済み。
+OrbStack は cloud-init の**後**に「macOS ユーザー名のユーザー」を作成する。そのため mise / Node / npm 製 CLI / Claude Code / Kiro CLI といったユーザー固有ツールは、cloud-init ではなく**初回ログイン時にそのユーザー自身で自動導入**される（ネットワーク経由のダウンロードのため数分かかる）。apt パッケージ・gh・mo・draw.io・AWS CLI・Docker は cloud-init の boot 時にシステム全体へ導入済み。
 
 ### 4. プロビジョニング完了の確認
 
@@ -156,20 +156,41 @@ orb config set machine.sandbox.forward_ssh_agent true   # SSH エージェント
 > [!TIP]
 > マウントは「必要なプロジェクトフォルダだけ」を共有するのが安全。ホームディレクトリ全体や `~/.ssh` などはマウントしないこと。マウントしたフォルダ内のコードは Mac 上の実体を読み書きできる点に注意。
 
-## neovim 設定（マウントせず git で同期）
+## 導入されるツール
 
-neovim 設定は**マウントしない**。理由:
+Skill（`bigdragon0610/agent-skills`）の作業に必要なものと、開発の基本ツールだけを入れる。一覧の正本は `cloud-init/user-data.yml`。
 
-- OrbStack のマウントは read-write のみ（read-only 指定不可）。`~/.config/nvim` をマウントすると、サンドボックス内の untrusted コードが `init.lua` 等を改変でき、次に **Mac 側で nvim を開いた瞬間**にそのコードが Mac 権限で実行され、隔離を突破される。
-- treesitter パーサや native プラグインは macOS / Linux でバイナリが異なり、`~/.local/share/nvim` まで共有すると壊れる。
+| 用途 | ツール | 導入方法 |
+| --- | --- | --- |
+| 基本 | git, curl, wget, build-essential, unzip, jq, file, python3 | apt |
+| GitHub（github-pr-attachment ほか） | gh | 公式 apt リポジトリ |
+| Markdown 閲覧 | mo（k1LoW/mo） | GitHub Release の .deb（checksums.txt で検証） |
+| procedure-doc | pandoc, playwright-cli + Chromium | apt / mise |
+| orbstack-playwright-vnc | xvfb, x11vnc, xdotool, x11-utils, openssl, playwright-cli + Chromium | apt / mise |
+| drawio | draw.io Desktop（`/opt/drawio`、ラッパー `/usr/local/bin/drawio`）, GTK/NSS 等の実行ライブラリ | AppImage を展開（SHA256 で検証） / apt |
+| line-stamp-production | imagemagick, fonts-noto-cjk | apt |
+| Node / Python ツール | node (LTS), uv, codex, playwright-cli | mise |
+| Codex のサンドボックス | bubblewrap | apt |
+| エージェント | Claude Code, Kiro CLI | 公式インストーラ |
+| AWS / コンテナ | AWS CLI v2, Docker Engine, git-secrets | 公式 zip / 公式 apt / make install |
 
-そこで dotfiles を git で**一方向 clone** する。`user-setup.sh` が初回ログイン時に以下を実行する。
+### mise によるバージョン管理
 
-```bash
-git clone --depth 1 https://github.com/bigdragon0610/nvim-config.git ~/.config/nvim
+Node や npm 製 CLI は [mise](https://mise.jdx.dev/) で管理する（Volta は開発終了し、公式に mise への移行が推奨されているため）。宣言は全ユーザー共通の `/etc/mise/config.toml` にあり、初回ログイン時に `mise install` で導入される。
+
+```toml
+[tools]
+node = "lts"
+uv = "latest"
+"npm:@openai/codex" = "latest"
+"npm:@playwright/cli" = "0.1.15"
 ```
 
-設定（コード）は Mac 側リポジトリ経由でのみ更新され、プラグインは各マシンで Linux 用に新規導入される。別のリポジトリを使う場合は `cloud-init/user-data.yml` 内の clone URL を変更する。プライベートリポジトリにする場合は HTTPS では認証が必要になるため、`orb create --isolated --forward-ssh-agent ...` で SSH エージェントを転送するか、トークンを用意する。
+- 何が入っているかは `mise ls` で確認できる（宣言元のファイルも表示される）。
+- 個人的に足すツールは `mise use -g <tool>` で `~/.config/mise/config.toml` に書かれ、system 側の宣言を上書きする。
+- プロジェクト固有のバージョンはリポジトリの `mise.toml`（または `.nvmrc` 等）で指定する。
+- 対話シェルは `~/.bashrc` の `mise activate`、非対話（`bash -lc` やエージェントのコマンド実行）は `~/.profile` で PATH に通した shims で解決される。
+- npm バックエンドも `~/.npmrc` の `ignore-scripts=true` に従う。
 
 ## ターミナルの terminfo（Ctrl+L が効かない時）
 
@@ -180,16 +201,6 @@ Ghostty / kitty / WezTerm など独自 `TERM` を使うターミナルだと、�
 ```bash
 infocmp -x "$TERM" | orb run -m sandbox tic -x -
 ```
-
-## neovim のクリップボード（ヤンクが効かない時）
-
-サンドボックスでは Mac から `DISPLAY`（XQuartz の X11 ソケット）が転送されてくる。neovim は `DISPLAY` を見て `xclip` を使おうとするが、隔離 VM 内ではその表示に到達できず `Can't open display: ...` でヤンクが失敗する（OrbStack の `pbcopy` ブリッジも隔離下では無効）。
-
-サンドボックス側だけで、共有 dotfiles を変更せずに対処している:
-
-- `user-setup.sh` が runtimepath 上の `~/.local/share/nvim/site/after/plugin/zz-sandbox-clipboard.lua`（ユーザー設定の**後**に読まれる）を作成し、クリップボードを **OSC 52（Ghostty 等の端末エスケープ）** に切り替える。X11 もホストアクセスも不要で隔離マシンでそのまま動く。
-- セキュア重視のため**コピーのみ** OSC 52 を使い、ペーストは端末クリップボードを読まず直近ヤンクを返す（クリップボードの読み取り・漏洩・ハングを回避）。Mac のクリップボードを nvim に貼るときは端末の通常ペースト（Cmd+V）を使う。
-- `/etc/profile.d/zz-clean-display.sh` が、転送された無効な `DISPLAY` をログイン時に外す（xclip 等の誤作動防止）。
 
 ## cloud-init について
 
@@ -295,7 +306,7 @@ orb restart sandbox
 
 - **AWS**: `aws configure`、SSO、または環境変数で設定（隔離マシンには Mac の `~/.aws` は共有されない）。
 - **Kiro CLI / Claude Code**: 初回実行時にブラウザでの認証へ誘導される（隔離マシンでもインターネット経由の認証は可能）。
-- Volta が PATH に反映されない場合は一度ログインし直すか、`source ~/.bashrc` を実行する。
+- mise で入れたツールが PATH に反映されない場合は一度ログインし直すか、`source ~/.bashrc` を実行する。
 
 ## 機密情報の扱い
 

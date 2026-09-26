@@ -10,11 +10,15 @@
 #
 # 構成:
 #   - システム全体ツール … cloud-init の boot 時 (root) に導入
-#       neovim (apt), AWS CLI v2 (公式zip, アーキ自動判定),
-#       Docker Engine + Compose/Buildx プラグイン (公式 apt リポジトリ)
+#       apt: 基本ツール / Skill 用ツール（下記 packages 参照）
+#       gh (公式 apt リポジトリ), mo (GitHub Release .deb, SHA256 検証),
+#       draw.io Desktop (AppImage を /opt/drawio に展開, SHA256 検証),
+#       AWS CLI v2 (公式zip), Docker Engine + Compose/Buildx (公式 apt リポジトリ),
+#       git-secrets
 #   - ユーザー固有ツール … 初回ログイン時にログインユーザー自身で導入
-#       Volta, Node/npm (Volta経由), Claude Code (公式installer), Kiro CLI (zip),
-#       Rust (rustup + rust-analyzer/rust-src)
+#       mise（ランタイム/CLI のバージョン管理。宣言は /etc/mise/config.toml）
+#         -> node, uv, codex, playwright-cli
+#       playwright 用 Chromium, Claude Code (公式installer), Kiro CLI (zip)
 #
 #   ※ OrbStack は cloud-init の後に「macOSユーザー名のユーザー」を作成するため、
 #      runcmd(=boot時/root) では対象ユーザーがまだ存在しない。そこでユーザー固有
@@ -28,6 +32,7 @@ package_update: true
 package_upgrade: true
 
 packages:
+  # --- 基本ツール ---
   - git
   - curl
   - wget
@@ -35,10 +40,43 @@ packages:
   - build-essential
   - unzip
   - jq
-  - neovim
+  - file
   - ncurses-bin
+  - python3
+  # --- Codex CLI の Linux サンドボックス ---
+  - bubblewrap
+  # --- procedure-doc: Markdown -> docx ---
+  - pandoc
+  # --- line-stamp-production: 画像加工と日本語フォント ---
+  - imagemagick
+  - fonts-noto-cjk
+  # --- orbstack-playwright-vnc: 仮想ディスプレイと VNC ---
+  - xvfb
+  - x11vnc
+  - xdotool
+  - x11-utils
+  - openssl
+  # --- drawio: draw.io Desktop (Electron) の実行ライブラリ ---
+  - libgtk-3-0t64
+  - libnss3
+  - libasound2t64
+  - libgbm1
+  - libxss1
+  - libxtst6
 
 write_files:
+  # --- mise で管理するツールの宣言（全ユーザー共通の system config）----------
+  # 追加・更新はここを編集する。個人用の追加は ~/.config/mise/config.toml へ。
+  - path: /etc/mise/config.toml
+    permissions: '0644'
+    content: |
+      [tools]
+      node = "lts"
+      uv = "latest"
+      "npm:@openai/codex" = "latest"
+      # orbstack-playwright-vnc / procedure-doc Skill が前提とするバージョン
+      "npm:@playwright/cli" = "0.1.15"
+
   # --- 初回ログイン時にユーザー固有ツールを導入する本体 --------------------
   - path: /usr/local/sbin/user-setup.sh
     permissions: '0755'
@@ -51,16 +89,29 @@ write_files:
       exec > >(tee -a "$LOG") 2>&1
       echo "[sandbox] $(date -Is) provisioning user tools for $(whoami)"
 
-      # Volta（curl|bash でユーザーの shell 設定に PATH も追記される）
-      export VOLTA_HOME="$HOME/.volta"
-      if [ ! -x "$VOLTA_HOME/bin/volta" ]; then
-        curl -fsSL https://get.volta.sh | bash
-      fi
-      export PATH="$VOLTA_HOME/bin:$PATH"
+      # npm の postinstall を既定で無効化（信頼するパッケージだけ個別に許可する）。
+      # mise の npm バックエンドもこの設定で動くため、ツール導入より先に置く。
+      printf 'ignore-scripts=true\nfund=false\n' > "$HOME/.npmrc"
 
-      # Node / npm は Volta 経由で導入
-      volta install node
-      volta install npm
+      # mise（公式インストーラ -> ~/.local/bin/mise）
+      export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+      if ! command -v mise >/dev/null 2>&1; then
+        curl -fsSL https://mise.run | sh
+      fi
+      # /etc/mise/config.toml に宣言したツールを導入
+      mise install --yes
+
+      # 対話シェルは mise activate、非対話（bash -lc やエージェント）は shims で PATH を通す
+      if ! grep -q 'mise activate' "$HOME/.bashrc" 2>/dev/null; then
+        echo 'eval "$($HOME/.local/bin/mise activate bash)"' >> "$HOME/.bashrc"
+      fi
+      if ! grep -q 'mise/shims' "$HOME/.profile" 2>/dev/null; then
+        echo 'export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"' >> "$HOME/.profile"
+      fi
+
+      # playwright-cli 用の Chromium（Linux ARM64 では Google Chrome が無いため）
+      mise exec -- playwright-cli install-browser chromium || \
+        echo "[sandbox] chromium install failed (skipped)"
 
       # Claude Code（公式ネイティブインストーラ -> ~/.local/bin）
       curl -fsSL https://claude.ai/install.sh | bash
@@ -85,20 +136,10 @@ write_files:
       "$ktmp/kirocli/install.sh" --no-confirm
       rm -rf "$ktmp"
 
-      # Rust（rustup -> ~/.cargo。neovim の LSP 補完用に rust-analyzer / rust-src も入れる。
-      # rustup が ~/.bashrc・~/.profile に ~/.cargo/bin の PATH 設定を追記する）
-      if [ ! -x "$HOME/.cargo/bin/rustup" ]; then
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-          | sh -s -- -y -c rust-analyzer -c rust-src
-      fi
-
       # 今後のシェルで ~/.local/bin を PATH に通す
       if ! grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null; then
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
       fi
-
-      # npm の postinstall を既定で無効化（信頼するパッケージだけ個別に許可する）
-      printf 'ignore-scripts=true\nfund=false\n' > "$HOME/.npmrc"
 
       # docker グループへ追加（sudo なしで docker を使う）。boot 時点ではこのユーザーが
       # 存在しないため cloud-init 側では行えず、初回ログイン時にここで行う。
@@ -116,59 +157,6 @@ write_files:
         git config --global init.templateDir "$HOME/.git-templates/git-secrets"
       fi
 
-      # neovim 設定（dotfiles を一方向 clone。プラグインは初回起動時に Linux 用へ入る）
-      # ※ public リポジトリのため HTTPS で認証不要。設定の改変は Mac 側リポジトリ経由のみ。
-      if [ ! -e "$HOME/.config/nvim" ]; then
-        mkdir -p "$HOME/.config"
-        git clone --depth 1 https://github.com/bigdragon0610/nvim-config.git "$HOME/.config/nvim" || \
-          echo "[sandbox] nvim-config clone failed (skipped)"
-      fi
-
-      # neovim クリップボード（サンドボックス専用・OSC52 コピーのみ）。
-      # 共有 dotfiles (~/.config/nvim) は変更せず、runtimepath 上の別ディレクトリに
-      # ユーザー設定の「後」に読まれる上書きを置く。ペーストは端末クリップボードを
-      # 読まず直近ヤンクを返す（クリップボード漏洩・読み取りプロンプト・ハングを回避）。
-      mkdir -p "$HOME/.local/share/nvim/site/after/plugin"
-      cat > "$HOME/.local/share/nvim/site/after/plugin/zz-sandbox-clipboard.lua" <<'LUAEOF'
-      local ok, osc52 = pcall(require, "vim.ui.clipboard.osc52")
-      if ok then
-      vim.g.clipboard = {
-      name = "OSC 52 (sandbox, copy-only)",
-      copy = { ["+"] = osc52.copy("+"), ["*"] = osc52.copy("*") },
-      paste = {
-      ["+"] = function() return vim.split(vim.fn.getreg(""), "\n") end,
-      ["*"] = function() return vim.split(vim.fn.getreg(""), "\n") end,
-      },
-      }
-      end
-      LUAEOF
-
-      # neovim サンドボックス識別（サンドボックス専用・共有 dotfiles は変更しない）。
-      # mini.statusline のハイライト群を青系へ上書きし、隔離環境だと一目で分かるようにする。
-      # colorscheme 変更で塗り直されるため ColorScheme イベントでも再適用する。
-      cat > "$HOME/.local/share/nvim/site/after/plugin/zz-sandbox-ui.lua" <<'LUAEOF'
-      local function paint()
-      local mode = { bg = "#2f5fa6", fg = "#f0f4f8", bold = true }
-      local mid  = { bg = "#13283f", fg = "#c3d5ea" }
-      local off  = { bg = "#0d1a2c", fg = "#94a9c4" }
-      for _, g in ipairs({
-      "MiniStatuslineModeNormal", "MiniStatuslineModeInsert",
-      "MiniStatuslineModeVisual", "MiniStatuslineModeReplace",
-      "MiniStatuslineModeCommand", "MiniStatuslineModeOther",
-      }) do
-      vim.api.nvim_set_hl(0, g, mode)
-      end
-      vim.api.nvim_set_hl(0, "MiniStatuslineFilename", mid)
-      vim.api.nvim_set_hl(0, "MiniStatuslineDevinfo",  mid)
-      vim.api.nvim_set_hl(0, "MiniStatuslineFileinfo", mid)
-      vim.api.nvim_set_hl(0, "MiniStatuslineInactive", off)
-      vim.api.nvim_set_hl(0, "StatusLine",   mid)
-      vim.api.nvim_set_hl(0, "StatusLineNC", off)
-      end
-      paint()
-      vim.api.nvim_create_autocmd("ColorScheme", { callback = paint })
-      LUAEOF
-
       touch "$MARKER"
       echo "[sandbox] done. open a new shell or run 'source ~/.bashrc' to use the tools."
 
@@ -183,11 +171,12 @@ write_files:
         /usr/local/sbin/user-setup.sh || echo "[sandbox] user-setup failed; see ~/.sandbox-setup.log"
       fi
 
-  # --- Mac から漏れてきた無効な X11 DISPLAY を掃除（隔離マシンに X サーバは無い）---
+  # --- Mac から漏れてきた無効な X11 DISPLAY を掃除 ----------------------------
   - path: /etc/profile.d/zz-clean-display.sh
     permissions: '0644'
     content: |
-      # 転送された XQuartz の DISPLAY は VM 内で無効。残ると xclip 等が誤作動するため外す
+      # 転送された XQuartz の DISPLAY は VM 内で無効。残ると X11 を使うツールが
+      # 到達できない表示へ接続しようとして失敗するため外す（Xvfb を使う側は明示的に DISPLAY を設定する）
       case "${DISPLAY:-}" in
         */org.xquartz:*|/private/tmp/*|/tmp/com.apple.*) unset DISPLAY ;;
       esac
@@ -207,6 +196,15 @@ write_files:
           ;;
       esac
 
+  # --- draw.io Desktop のヘッドレス実行ラッパー --------------------------------
+  - path: /usr/local/bin/drawio
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      # draw.io Desktop (extracted AppImage) — headless wrapper for this sandbox.
+      # Runs under Xvfb and disables the Chromium sandbox so the CLI works without a display.
+      exec xvfb-run -a /opt/drawio/drawio --no-sandbox "$@"
+
   # --- boot 時 (root) に走らせるシステム全体プロビジョニング --------------
   - path: /usr/local/sbin/system-setup.sh
     permissions: '0755'
@@ -214,29 +212,70 @@ write_files:
       #!/usr/bin/env bash
       set -euxo pipefail
       export DEBIAN_FRONTEND=noninteractive
-      # AWS CLI v2（アーキ自動判定 -> /usr/local/bin/aws）
+      DEB_ARCH="$(dpkg --print-architecture)"   # arm64 / amd64
       case "$(uname -m)" in
-        aarch64|arm64) AWS_ARCH=aarch64 ;;
-        x86_64|amd64)  AWS_ARCH=x86_64 ;;
-        *)             AWS_ARCH="$(uname -m)" ;;
+        aarch64|arm64) UNAME_ARCH=aarch64 ;;
+        x86_64|amd64)  UNAME_ARCH=x86_64 ;;
+        *)             UNAME_ARCH="$(uname -m)" ;;
       esac
+
+      # GitHub の最新リリースタグを返す（API のレート制限を避けて /releases/latest のリダイレクトを使う）
+      latest_tag() {
+        curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$1/releases/latest" | sed 's#.*/tag/##'
+      }
+
+      # AWS CLI v2（-> /usr/local/bin/aws）
       awstmp="$(mktemp -d)"
-      curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip" -o "$awstmp/awscliv2.zip"
+      curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${UNAME_ARCH}.zip" -o "$awstmp/awscliv2.zip"
       unzip -q "$awstmp/awscliv2.zip" -d "$awstmp"
       "$awstmp/aws/install" --update
       rm -rf "$awstmp"
 
+      # apt リポジトリ用の鍵置き場
+      install -m 0755 -d /etc/apt/keyrings
+      . /etc/os-release
+
       # Docker Engine（公式 apt リポジトリ。Compose / Buildx はプラグインとして同梱）
       # ※ Mac の Docker Desktop / OrbStack の Docker とは別物で、この隔離マシン内で完結する。
-      install -m 0755 -d /etc/apt/keyrings
       curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
       chmod a+r /etc/apt/keyrings/docker.asc
-      . /etc/os-release
-      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+      echo "deb [arch=${DEB_ARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
         > /etc/apt/sources.list.d/docker.list
+
+      # GitHub CLI（公式 apt リポジトリ）
+      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+      chmod a+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+      echo "deb [arch=${DEB_ARCH} signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list
+
       apt-get update -qq
-      apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin gh
       systemctl enable --now docker
+
+      # mo（Markdown ビューア。k1LoW/mo の最新 .deb を checksums.txt で検証して導入）
+      motmp="$(mktemp -d)"
+      MO_TAG="$(latest_tag k1LoW/mo)"
+      MO_DEB="mo_${MO_TAG#v}-1_${DEB_ARCH}.deb"
+      curl -fsSL "https://github.com/k1LoW/mo/releases/download/${MO_TAG}/${MO_DEB}" -o "$motmp/${MO_DEB}"
+      curl -fsSL "https://github.com/k1LoW/mo/releases/download/${MO_TAG}/checksums.txt" -o "$motmp/checksums.txt"
+      (cd "$motmp" && grep " ${MO_DEB}\$" checksums.txt | sha256sum -c -)
+      apt-get install -y -qq "$motmp/${MO_DEB}"
+      rm -rf "$motmp"
+
+      # draw.io Desktop（AppImage を展開して /opt/drawio へ。FUSE 不要で動かすため展開する）
+      case "$DEB_ARCH" in arm64) DRAWIO_ARCH=arm64 ;; *) DRAWIO_ARCH=x86_64 ;; esac
+      dtmp="$(mktemp -d)"
+      DRAWIO_TAG="$(latest_tag jgraph/drawio-desktop)"
+      DRAWIO_IMG="drawio-${DRAWIO_ARCH}-${DRAWIO_TAG#v}.AppImage"
+      curl -fsSL "https://github.com/jgraph/drawio-desktop/releases/download/${DRAWIO_TAG}/${DRAWIO_IMG}" -o "$dtmp/${DRAWIO_IMG}"
+      curl -fsSL "https://github.com/jgraph/drawio-desktop/releases/download/${DRAWIO_TAG}/Files-SHA256-Hashes.txt" -o "$dtmp/hashes.txt"
+      (cd "$dtmp" && grep " ${DRAWIO_IMG}\$" hashes.txt | sha256sum -c -)
+      chmod +x "$dtmp/${DRAWIO_IMG}"
+      (cd "$dtmp" && "./${DRAWIO_IMG}" --appimage-extract >/dev/null)
+      rm -rf /opt/drawio
+      mv "$dtmp/squashfs-root" /opt/drawio
+      chmod -R a+rX /opt/drawio
+      rm -rf "$dtmp"
 
       # git-secrets（AWS謹製。コミット前に認証情報の混入を検知する。make install で /usr/local/bin へ）
       gtmp="$(mktemp -d)"
@@ -244,6 +283,7 @@ write_files:
       make -C "$gtmp/git-secrets" install
       rm -rf "$gtmp"
 
+      apt-get clean
       touch /etc/cloud-init-done
 
 runcmd:
