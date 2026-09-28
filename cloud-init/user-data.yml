@@ -157,6 +157,38 @@ write_files:
         git config --global init.templateDir "$HOME/.git-templates/git-secrets"
       fi
 
+      # --- エージェントの自動実行設定 ---------------------------------------
+      # このマシン自体が隔離境界なので、エージェント側の承認・制限は外して自動で動かす。
+      # Kiro CLI: 全ツール自動承認のエージェントを既定にする
+      mkdir -p "$HOME/.kiro/agents" "$HOME/.kiro/skills"
+      cat > "$HOME/.kiro/agents/allAllowedTools.json" <<'JSONEOF'
+      {
+        "name": "allAllowedTools",
+        "description": "All tools auto-approved",
+        "tools": ["*"],
+        "allowedTools": ["*"],
+        "toolAliases": {},
+        "hooks": {},
+        "mcpServers": {},
+        "includeMcpJson": true,
+        "resources": ["file://.kiro/steering/**/*.md", "skill://~/.kiro/skills/**/SKILL.md"]
+      }
+      JSONEOF
+      "$HOME/.local/bin/kiro-cli" settings chat.defaultAgent allAllowedTools || \
+        echo "[sandbox] failed to set kiro default agent"
+
+      # Codex: 承認なし・Codex 独自のサンドボックス制限なし
+      mkdir -p "$HOME/.codex" "$HOME/.codex/skills"
+      touch "$HOME/.codex/config.toml"
+      if ! grep -q '^approval_policy' "$HOME/.codex/config.toml"; then
+        # トップレベルのキーはテーブルより前に置く必要があるため先頭へ挿入する
+        printf 'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n%s' \
+          "$(cat "$HOME/.codex/config.toml")" > "$HOME/.codex/config.toml"
+      fi
+
+      # Claude Code: link.sh が配布先として認識するよう skills ディレクトリだけ作る
+      mkdir -p "$HOME/.claude/skills"
+
       touch "$MARKER"
       echo "[sandbox] done. open a new shell or run 'source ~/.bashrc' to use the tools."
 
@@ -197,6 +229,28 @@ write_files:
       esac
 
   # --- draw.io Desktop のヘッドレス実行ラッパー --------------------------------
+  # --- Skill の復旧（gh auth login 後に 1 回実行する）-------------------------
+  # agent-skills は Private リポジトリで認証が要るため、プロビジョニングでは自動実行しない。
+  - path: /usr/local/bin/sandbox-restore-skills
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      DEST="$HOME/ryudai/agent-skills"
+      if ! gh auth status >/dev/null 2>&1; then
+        echo "先に gh auth login を実行してください" >&2; exit 1
+      fi
+      gh auth setup-git
+      if [ -d "$DEST/.git" ]; then
+        git -C "$DEST" pull --ff-only
+        git -C "$DEST" submodule update --init --recursive
+      else
+        mkdir -p "$(dirname "$DEST")"
+        git clone --recurse-submodules https://github.com/bigdragon0610/agent-skills.git "$DEST"
+      fi
+      mkdir -p "$HOME/.kiro/skills" "$HOME/.claude/skills" "$HOME/.codex/skills"
+      "$DEST/scripts/link.sh"
+
   - path: /usr/local/bin/drawio
     permissions: '0755'
     content: |
