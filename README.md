@@ -170,6 +170,7 @@ Skill（`bigdragon0610/agent-skills`）の作業に必要なものと、開発�
 | drawio | draw.io Desktop（`/opt/drawio`、ラッパー `/usr/local/bin/drawio`）, GTK/NSS 等の実行ライブラリ | AppImage を展開（SHA256 で検証） / apt |
 | line-stamp-production | imagemagick, fonts-noto-cjk | apt |
 | Node / Python ツール | node (LTS), uv, codex, playwright-cli | mise |
+| エディタ | neovim, typescript 6, typescript-language-server | apt / mise |
 | Codex のサンドボックス | bubblewrap | apt |
 | エージェント | Claude Code, Kiro CLI | 公式インストーラ |
 | AWS / コンテナ | AWS CLI v2, Docker Engine, git-secrets | 公式 zip / 公式 apt / make install |
@@ -184,6 +185,8 @@ node = "lts"
 uv = "latest"
 "npm:@openai/codex" = "latest"
 "npm:@playwright/cli" = "0.1.15"
+"npm:typescript" = "6"
+"npm:typescript-language-server" = "latest"
 ```
 
 - 何が入っているかは `mise ls` で確認できる（宣言元のファイルも表示される）。
@@ -191,6 +194,26 @@ uv = "latest"
 - プロジェクト固有のバージョンはリポジトリの `mise.toml`（または `.nvmrc` 等）で指定する。
 - 対話シェルは `~/.bashrc` の `mise activate`、非対話（`bash -lc` やエージェントのコマンド実行）は `~/.profile` で PATH に通した shims で解決される。
 - npm バックエンドも `~/.npmrc` の `ignore-scripts=true` に従う。
+
+## neovim
+
+設定は `bigdragon0610/nvim-config` を初回ログイン時に `~/.config/nvim` へ **一方向 clone** する（マウントはしない）。
+
+- OrbStack のマウントは read-write のみ。`~/.config/nvim` をマウントすると、サンドボックス内のコードが `init.lua` を改変でき、次に Mac で nvim を開いたときに Mac の権限で実行されてしまう。
+- プラグインは Linux 用に各マシンで取得する（初回ログイン時に headless で先に取得しておく）。
+- 設定の更新は Mac 側リポジトリへ push し、sandbox では `cd ~/.config/nvim && git pull --ff-only`。
+
+共有 dotfiles は変えず、サンドボックス専用の上書きを `~/.local/share/nvim/site/after/plugin/` に置く（ユーザー設定の後に読まれる）。
+
+| ファイル | 内容 |
+| --- | --- |
+| `zz-sandbox-clipboard.lua` | クリップボードを OSC 52 に切り替える。隔離下では X11 / `pbcopy` ブリッジが使えないため。**コピーのみ**で、ペーストは端末クリップボードを読まず直近ヤンクを返す（読み取り・漏洩・ハングを回避）。Mac のクリップボードを貼るときは Cmd+V |
+| `zz-sandbox-ui.lua` | mini.statusline を青系に塗り、隔離環境だと一目で分かるようにする |
+| `zz-sandbox-lsp.lua` | mise で入れた typescript の tsserver の場所を `ts_ls` に教える |
+| `zz-sandbox-image.lua` | image.nvim の不具合回避。`nvim .` で開いて `:q` すると、置き換え済みのバッファに対する BufEnter で `Invalid buffer id` が出るため、無効なバッファでは image.nvim の autocmd を実行しない |
+
+TypeScript 7（Go 版）は tsserver を同梱せず typescript-language-server が使えないため、6 系に固定している。
+`img-clip.nvim`（クリップボード画像の貼り付け）は、隔離下で Mac のクリップボードを読めないため sandbox では動かない。
 
 ## ターミナルの terminfo（Ctrl+L が効かない時）
 

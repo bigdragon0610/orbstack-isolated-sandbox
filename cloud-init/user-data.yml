@@ -18,7 +18,8 @@
 #   - ユーザー固有ツール … 初回ログイン時にログインユーザー自身で導入
 #       mise（ランタイム/CLI のバージョン管理。宣言は /etc/mise/config.toml）
 #         -> node, uv, codex, playwright-cli
-#       playwright 用 Chromium, Claude Code (公式installer), Kiro CLI (zip)
+#       playwright 用 Chromium, Claude Code (公式installer), Kiro CLI (zip),
+#       neovim 設定 (bigdragon0610/nvim-config を clone + sandbox 専用の上書き)
 #
 #   ※ OrbStack は cloud-init の後に「macOSユーザー名のユーザー」を作成するため、
 #      runcmd(=boot時/root) では対象ユーザーがまだ存在しない。そこでユーザー固有
@@ -43,6 +44,7 @@ packages:
   - file
   - ncurses-bin
   - python3
+  - neovim
   # --- Codex CLI の Linux サンドボックス ---
   - bubblewrap
   # --- procedure-doc: Markdown -> docx ---
@@ -76,6 +78,10 @@ write_files:
       "npm:@openai/codex" = "latest"
       # orbstack-playwright-vnc / procedure-doc Skill が前提とするバージョン
       "npm:@playwright/cli" = "0.1.15"
+      # neovim の ts_ls 用。TypeScript 7（Go 版）は tsserver を持たず
+      # typescript-language-server が使えないため 6 系に固定する
+      "npm:typescript" = "6"
+      "npm:typescript-language-server" = "latest"
 
   # --- 初回ログイン時にユーザー固有ツールを導入する本体 --------------------
   - path: /usr/local/sbin/user-setup.sh
@@ -135,6 +141,96 @@ write_files:
       unzip -q "$ktmp/kirocli.zip" -d "$ktmp"
       "$ktmp/kirocli/install.sh" --no-confirm
       rm -rf "$ktmp"
+
+      # neovim 設定（dotfiles を一方向 clone。プラグインは初回起動時に Linux 用へ入る）
+      # ※ public リポジトリのため HTTPS で認証不要。設定の改変は Mac 側リポジトリ経由のみ。
+      if [ ! -e "$HOME/.config/nvim" ]; then
+        mkdir -p "$HOME/.config"
+        git clone --depth 1 https://github.com/bigdragon0610/nvim-config.git "$HOME/.config/nvim" || \
+          echo "[sandbox] nvim-config clone failed (skipped)"
+      fi
+
+      # neovim クリップボード（サンドボックス専用・OSC52 コピーのみ）。
+      # 共有 dotfiles (~/.config/nvim) は変更せず、runtimepath 上の別ディレクトリに
+      # ユーザー設定の「後」に読まれる上書きを置く。ペーストは端末クリップボードを
+      # 読まず直近ヤンクを返す（クリップボード漏洩・読み取りプロンプト・ハングを回避）。
+      mkdir -p "$HOME/.local/share/nvim/site/after/plugin"
+      cat > "$HOME/.local/share/nvim/site/after/plugin/zz-sandbox-clipboard.lua" <<'LUAEOF'
+      local ok, osc52 = pcall(require, "vim.ui.clipboard.osc52")
+      if ok then
+      vim.g.clipboard = {
+      name = "OSC 52 (sandbox, copy-only)",
+      copy = { ["+"] = osc52.copy("+"), ["*"] = osc52.copy("*") },
+      paste = {
+      ["+"] = function() return vim.split(vim.fn.getreg(""), "\n") end,
+      ["*"] = function() return vim.split(vim.fn.getreg(""), "\n") end,
+      },
+      }
+      end
+      LUAEOF
+
+      # neovim サンドボックス識別（mini.statusline を青系へ上書き。ColorScheme 変更時も再適用）
+      cat > "$HOME/.local/share/nvim/site/after/plugin/zz-sandbox-ui.lua" <<'LUAEOF'
+      local function paint()
+      local mode = { bg = "#2f5fa6", fg = "#f0f4f8", bold = true }
+      local mid  = { bg = "#13283f", fg = "#c3d5ea" }
+      local off  = { bg = "#0d1a2c", fg = "#94a9c4" }
+      for _, g in ipairs({
+      "MiniStatuslineModeNormal", "MiniStatuslineModeInsert",
+      "MiniStatuslineModeVisual", "MiniStatuslineModeReplace",
+      "MiniStatuslineModeCommand", "MiniStatuslineModeOther",
+      }) do
+      vim.api.nvim_set_hl(0, g, mode)
+      end
+      vim.api.nvim_set_hl(0, "MiniStatuslineFilename", mid)
+      vim.api.nvim_set_hl(0, "MiniStatuslineDevinfo",  mid)
+      vim.api.nvim_set_hl(0, "MiniStatuslineFileinfo", mid)
+      vim.api.nvim_set_hl(0, "MiniStatuslineInactive", off)
+      vim.api.nvim_set_hl(0, "StatusLine",   mid)
+      vim.api.nvim_set_hl(0, "StatusLineNC", off)
+      end
+      paint()
+      vim.api.nvim_create_autocmd("ColorScheme", { callback = paint })
+      LUAEOF
+
+      # ts_ls が mise の typescript を見つけられるよう tsserver の場所を教える
+      cat > "$HOME/.local/share/nvim/site/after/plugin/zz-sandbox-lsp.lua" <<'LUAEOF'
+      local out = vim.fn.system({ "mise", "where", "npm:typescript" })
+      if vim.v.shell_error == 0 then
+        local lib = vim.trim(out) .. "/node_modules/typescript/lib"
+        if vim.uv.fs_stat(lib .. "/tsserver.js") then
+          vim.lsp.config("ts_ls", { init_options = { tsserver = { path = lib } } })
+        end
+      end
+      LUAEOF
+
+      # image.nvim の不具合回避（無効なバッファに対する autocmd を無視する）
+      cat > "$HOME/.local/share/nvim/site/after/plugin/zz-sandbox-image.lua" <<'LUAEOF'
+      -- image.nvim のバグ回避: `nvim .` などで起動直後に置き換えられたバッファ（buf 1）に対して
+      -- BufEnter のコールバックが走り、vim.bo[buf] が "Invalid buffer id" で落ちる。
+      -- （cmdheight=0 のため、エラーは :q したときにまとめて表示される）
+      -- image.nvim が登録する autocmd のコールバックだけ包み、無効なバッファなら何もしない。
+      local create = vim.api.nvim_create_autocmd
+      vim.api.nvim_create_autocmd = function(event, opts)
+        if type(opts) == "table" and type(opts.callback) == "function" then
+          local src = debug.getinfo(2, "S").source
+          if src:find("image.nvim/lua/image/", 1, true) then
+            local cb = opts.callback
+            opts.callback = function(args)
+              if args and args.buf and args.buf ~= 0 and not vim.api.nvim_buf_is_valid(args.buf) then
+                return
+              end
+              return cb(args)
+            end
+          end
+        end
+        return create(event, opts)
+      end
+      LUAEOF
+
+      # プラグイン（mini.nvim / nvim-lspconfig ほか）を先に取得しておく。later() の読み込みを待って終了する
+      nvim --headless -c 'lua vim.defer_fn(function() vim.cmd("qa!") end, 30000)' >/dev/null 2>&1 || \
+        echo "[sandbox] nvim plugin prefetch failed (skipped)"
 
       # 今後のシェルで ~/.local/bin を PATH に通す
       if ! grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null; then
