@@ -308,6 +308,24 @@ orb restart sandbox
 - **Kiro CLI / Claude Code**: 初回実行時にブラウザでの認証へ誘導される（隔離マシンでもインターネット経由の認証は可能）。
 - mise で入れたツールが PATH に反映されない場合は一度ログインし直すか、`source ~/.bashrc` を実行する。
 
+### Skill の復旧
+
+`gh auth login` の後に 1 回実行する。`bigdragon0610/agent-skills` を `~/ryudai/agent-skills` へ clone（既にあれば pull）し、`link.sh` で Kiro / Claude Code / Codex の `skills` へ symlink を張る。
+
+```bash
+gh auth login
+sandbox-restore-skills
+```
+
+### エージェントの自動実行設定
+
+このマシン自体を隔離境界とみなし、初回ログイン時にエージェント側の承認を外す設定を書き込む。
+
+- **Kiro CLI**: 全ツール自動承認の `~/.kiro/agents/allAllowedTools.json` を作り、`chat.defaultAgent` に設定する。
+- **Codex**: `~/.codex/config.toml` の先頭に `approval_policy = "never"` と `sandbox_mode = "danger-full-access"` を入れる。
+
+エージェントが何でも実行できる前提になるため、Mac のフォルダをマウントするときは特に範囲を絞る。
+
 ## 機密情報の扱い
 
 - cloud-init ファイルは平文で保存・共有される。トークン・パスワード・秘密鍵を直接書かないこと。
