@@ -13,7 +13,8 @@
 #       apt: 基本ツール / Skill 用ツール（下記 packages 参照）
 #       gh (公式 apt リポジトリ), mo (GitHub Release .deb, SHA256 検証),
 #       draw.io Desktop (AppImage を /opt/drawio に展開, SHA256 検証),
-#       AWS CLI v2 (公式zip), Docker Engine + Compose/Buildx (公式 apt リポジトリ),
+#       AWS CLI v2 (公式zip), Docker Engine + Compose/Buildx (公式 apt リポジトリ。
+#         containerd の overlayfs に userxattr を設定し EIO 対策),
 #       git-secrets
 #   - ユーザー固有ツール … 初回ログイン時にログインユーザー自身で導入
 #       mise（ランタイム/CLI のバージョン管理。宣言は /etc/mise/config.toml）
@@ -424,6 +425,24 @@ write_files:
 
       apt-get update -qq
       apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin gh
+
+      # containerd の overlayfs スナップショッターに userxattr を付ける（必須）。
+      # 隔離マシンでは root でも trusted.* 拡張属性を設定できない。overlayfs は
+      # 下位レイヤーのディレクトリを消すとき upper へ trusted.overlay.opaque を書くため、
+      # 既定では `docker run/build` 内の下位レイヤーのディレクトリ削除が
+      # Input/output error（EIO）で失敗する（例: pip install --upgrade pip, rm -rf）。
+      # userxattr を付けると overlay は user.overlay.* を使い、ディレクトリ削除は
+      # char-device whiteout になるため xattr を書かずに成功する。
+      # docker/containerd を起動する前に書く（この後の systemctl enable --now docker で反映）。
+      # containerd.io 既定の config.toml（version 2 / disabled_plugins=["cri"]）を壊さず、
+      # ファイル末尾に overlayfs プラグインのテーブルを追記する（冪等）。
+      if ! grep -q 'io.containerd.snapshotter.v1.overlayfs' /etc/containerd/config.toml 2>/dev/null; then
+        {
+          printf '\n[plugins."io.containerd.snapshotter.v1.overlayfs"]\n'
+          printf '  mount_options = ["userxattr"]\n'
+        } >> /etc/containerd/config.toml
+      fi
+
       systemctl enable --now docker
 
       # mo（Markdown ビューア。k1LoW/mo の最新 .deb を checksums.txt で検証して導入）

@@ -264,6 +264,45 @@ docker compose version
 
 稼働中のマシンへ後から入れる場合は [Docker 公式手順](https://docs.docker.com/engine/install/ubuntu/) を実行したうえで `sudo usermod -aG docker "$USER"` する。
 
+### overlayfs の userxattr 設定（ディレクトリ削除の EIO 対策）
+
+隔離マシンでは、`cloud-init` が containerd の overlayfs スナップショッターに `mount_options = ["userxattr"]` を設定する（`/etc/containerd/config.toml`）。これが無いと次のような**イメージ下位レイヤーのディレクトリ削除・リネームが `Input/output error`（EIO）で失敗する**。
+
+```bash
+# userxattr が無いと失敗する例
+docker run --rm debian:bookworm-slim rm -rf /usr/share/doc/zlib1g   # => Input/output error
+```
+
+典型例は `docker build` の `RUN pip install --upgrade pip` が古い `pip-*.dist-info` を消せず `OSError: [Errno 5] Input/output error` で落ちること。ファイルの削除や、コンテナ内で新しく作ったディレクトリの削除は成功する。
+
+**原因**: 隔離マシンの中では root でも `trusted.*` 拡張属性を設定できない（EPERM）。overlayfs は下位レイヤーのディレクトリを消すとき、上位レイヤーへ `trusted.overlay.opaque` を書こうとして EIO になる。`mount_options = ["userxattr"]` を付けると overlay は `user.overlay.*` を使い（かつ `redirect_dir=nofollow` と組み合わせてディレクトリ削除を char-device whiteout で表現する）、xattr を書かずに削除できる。これは `docker run` と `docker build`（既定の BuildKit インプロセスビルダー経由）の両方に効く。
+
+> [!NOTE]
+> この設定は overlay の**マウント**を userxattr にするもので、**ディレクトリ削除の実行時**の問題を解消する。一方、**opaque ディレクトリ（`.wh..wh..opq`）を含むレイヤーのイメージ展開（applier）** は別経路で、containerd の `OverlayConvertWhiteout` が `trusted.overlay.opaque` を直書きするため、`mount_options` の有無にかかわらず隔離マシンでは `failed to convert whiteout file ... operation not permitted` で失敗する。ただし一般的なベースイメージ（debian / alpine 等）や、BuildKit がエクスポートするレイヤーは opaque ディレクトリではなくファイル単位の whiteout を使うため、通常の `docker pull` / `docker build` では問題にならない。opaque を含むレイヤーを扱う必要が出た場合は上流（containerd）側の対応が要る。
+
+**既存の稼働マシンへ適用する**（新規作成なら `cloud-init` が自動で行うため不要）:
+
+```bash
+# 1) overlayfs スナップショッターに userxattr を追記（既定の config.toml を壊さず冪等）
+if ! grep -q 'io.containerd.snapshotter.v1.overlayfs' /etc/containerd/config.toml; then
+  sudo tee -a /etc/containerd/config.toml >/dev/null <<'EOF'
+
+[plugins."io.containerd.snapshotter.v1.overlayfs"]
+  mount_options = ["userxattr"]
+EOF
+fi
+
+# 2) containerd と docker を再起動して設定を反映
+sudo systemctl restart containerd docker
+
+# 3) 既に展開済みのイメージ／スナップショットは userxattr 無しの状態で作られている。
+#    取り込み直すために一度まっさらにする（実行中コンテナ・不要イメージが消える点に注意）
+docker system prune -a
+
+# 4) 確認（成功すれば対策済み）
+docker run --rm debian:bookworm-slim rm -rf /usr/share/doc/zlib1g && echo OK
+```
+
 ### Docker と隔離の関係
 
 `docker` グループはパスワードなしの root 相当で、`docker run -v /:/host` でサンドボックスの全ファイルを読み書きできる。ただし **本リポジトリの構成では新たな権限の獲得にはならない**。OrbStack が作るログインユーザーは元々パスワードなし `sudo` を持っており（`sudo -n true` が通る）、サンドボックス内で動く untrusted コードは Docker の有無にかかわらず root になれるため。
