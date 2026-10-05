@@ -283,14 +283,25 @@ docker run --rm debian:bookworm-slim rm -rf /usr/share/doc/zlib1g   # => Input/o
 **既存の稼働マシンへ適用する**（新規作成なら `cloud-init` が自動で行うため不要）:
 
 ```bash
-# 1) overlayfs スナップショッターに userxattr を追記（既定の config.toml を壊さず冪等）
+# 1) overlayfs スナップショッターに userxattr を設定（既定の config.toml を壊さず冪等）。
+#    containerd.io 既定の config.toml は version 宣言が無く（version 0 相当）、
+#    disabled_plugins も短縮形 ["cri"]。overlayfs テーブルだけ足すと v2.3 は
+#    起動のたびに "Configuration migrated from version 0 ..." の warning を出すため、
+#    version 4 へ揃える（短縮形の変換と version=4 の付与は必ずセットで。version=4 だけ
+#    足すと短縮形が弾かれ containerd が起動しなくなる）。
 if ! grep -q 'io.containerd.snapshotter.v1.overlayfs' /etc/containerd/config.toml; then
+  sudo sed -i 's/^disabled_plugins = \["cri"\]/disabled_plugins = ["io.containerd.grpc.v1.cri"]/' /etc/containerd/config.toml
+  grep -q '^version' /etc/containerd/config.toml || sudo sed -i '1i version = 4' /etc/containerd/config.toml
   sudo tee -a /etc/containerd/config.toml >/dev/null <<'EOF'
 
 [plugins."io.containerd.snapshotter.v1.overlayfs"]
   mount_options = ["userxattr"]
 EOF
 fi
+
+# 設定が正しく読まれるか（警告なし・mount_options 反映）を確認したい場合:
+#   sudo containerd --config /etc/containerd/config.toml config dump 2>&1 | grep -E 'warn|userxattr'
+# warning 行が出ず mount_options = ['userxattr'] が出れば OK。
 
 # 2) containerd と docker を再起動して設定を反映
 sudo systemctl restart containerd docker

@@ -434,9 +434,24 @@ write_files:
       # userxattr を付けると overlay は user.overlay.* を使い、ディレクトリ削除は
       # char-device whiteout になるため xattr を書かずに成功する。
       # docker/containerd を起動する前に書く（この後の systemctl enable --now docker で反映）。
-      # containerd.io 既定の config.toml（version 2 / disabled_plugins=["cri"]）を壊さず、
-      # ファイル末尾に overlayfs プラグインのテーブルを追記する（冪等）。
+      #
+      # containerd.io 既定の config.toml は version キーが無く（version 0 相当）、
+      # disabled_plugins も短縮形 ["cri"] で書かれている。ここに version を宣言せず
+      # overlayfs テーブルだけ足すと、containerd v2.3 は起動のたびに
+      #   warning "Configuration migrated from version 0 ..."
+      # を出す。これを避けるため config を version 4（v2.3 の既定）へ揃える:
+      # 先頭に version = 4 を宣言し、短縮形 disabled_plugins = ["cri"] を
+      # 正規 URI ["io.containerd.grpc.v1.cri"] へ変換する。これを行わずに version = 4
+      # だけ足すと短縮形が弾かれ containerd が起動しなくなる点に注意（両方セットで変換）。
+      # overlayfs プラグインが未設定のときだけ実行する（冪等）。
       if ! grep -q 'io.containerd.snapshotter.v1.overlayfs' /etc/containerd/config.toml 2>/dev/null; then
+        # 短縮形の disabled_plugins を正規 URI へ変換（version 4 では短縮形は不可）
+        sed -i 's/^disabled_plugins = \["cri"\]/disabled_plugins = ["io.containerd.grpc.v1.cri"]/' /etc/containerd/config.toml
+        # version 宣言が無ければ先頭に version = 4 を付与
+        if ! grep -q '^version' /etc/containerd/config.toml; then
+          sed -i '1i version = 4' /etc/containerd/config.toml
+        fi
+        # overlayfs に userxattr を追記
         {
           printf '\n[plugins."io.containerd.snapshotter.v1.overlayfs"]\n'
           printf '  mount_options = ["userxattr"]\n'
