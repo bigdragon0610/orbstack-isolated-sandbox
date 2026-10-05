@@ -433,7 +433,11 @@ write_files:
       # Input/output error（EIO）で失敗する（例: pip install --upgrade pip, rm -rf）。
       # userxattr を付けると overlay は user.overlay.* を使い、ディレクトリ削除は
       # char-device whiteout になるため xattr を書かずに成功する。
-      # docker/containerd を起動する前に書く（この後の systemctl enable --now docker で反映）。
+      #
+      # 注意: containerd.io の postinst（apt install）が containerd を既に起動する。
+      # docker.service は containerd を Wants（Requires ではない）するため、後続の
+      # `systemctl enable --now docker` は起動済みの containerd を再起動しない。
+      # そのため config 追記後に明示的に `systemctl restart containerd` して反映する。
       #
       # containerd.io 既定の config.toml は version キーが無く（version 0 相当）、
       # disabled_plugins も短縮形 ["cri"] で書かれている。ここに version を宣言せず
@@ -457,6 +461,10 @@ write_files:
           printf '  mount_options = ["userxattr"]\n'
         } >> /etc/containerd/config.toml
       fi
+
+      # containerd は上の apt install の postinst で既に起動済み。設定を反映するため再起動する。
+      # （docker.service は containerd を Wants なので、下の enable --now docker では再起動されない）
+      systemctl restart containerd
 
       systemctl enable --now docker
 
