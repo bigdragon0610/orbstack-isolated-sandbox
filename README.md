@@ -215,6 +215,17 @@ uv = "latest"
 TypeScript 7（Go 版）は tsserver を同梱せず typescript-language-server が使えないため、6 系に固定している。
 `img-clip.nvim`（クリップボード画像の貼り付け）は、隔離下で Mac のクリップボードを読めないため sandbox では動かない。
 
+## シェルのプロンプト
+
+Mac の oh-my-zsh（candy テーマ改）に合わせ、パスと Git ブランチ（未コミットの変更があれば `*`）を表示する。
+
+```text
+[~/ryudai/app] [main *]
+-> $
+```
+
+本体は `/usr/local/share/sandbox/prompt.bash` で、初回ログイン時に `~/.bashrc` へ読み込み行を追記する。
+
 ## ターミナルの terminfo（Ctrl+L が効かない時）
 
 Ghostty / kitty / WezTerm など独自 `TERM` を使うターミナルだと、その terminfo がマシン側に無く、`clear-screen`（Ctrl+L）等が動かない。terminfo は端末・バージョン依存なので cloud-init に静的同梱はせず、`create-machine.sh` が**作成後に現在の `$TERM` の定義を動的にコピー**する。

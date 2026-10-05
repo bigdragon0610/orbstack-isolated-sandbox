@@ -111,6 +111,10 @@ write_files:
       if ! grep -q 'mise activate' "$HOME/.bashrc" 2>/dev/null; then
         echo 'eval "$($HOME/.local/bin/mise activate bash)"' >> "$HOME/.bashrc"
       fi
+      # プロンプトを Mac と同じ見た目にする（既定 PS1 の後、Kiro CLI の post block より前に読ませる）
+      if ! grep -q 'sandbox/prompt.bash' "$HOME/.bashrc" 2>/dev/null; then
+        echo '[ -f /usr/local/share/sandbox/prompt.bash ] && . /usr/local/share/sandbox/prompt.bash' >> "$HOME/.bashrc"
+      fi
       if ! grep -q 'mise/shims' "$HOME/.profile" 2>/dev/null; then
         echo 'export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"' >> "$HOME/.profile"
       fi
@@ -323,6 +327,26 @@ write_files:
           fi
           ;;
       esac
+
+  # --- プロンプト: Mac の oh-my-zsh（candy 改）と同じ「パス + Git ブランチ」表示 ---
+  - path: /usr/local/share/sandbox/prompt.bash
+    permissions: '0644'
+    content: |
+      # サンドボックスのプロンプト（Mac の oh-my-zsh candy テーマ改と同じ見た目）
+      #   [~/path] [branch *]
+      #   -> $
+      # ~/.bashrc が既定の PS1 を設定した後に読み込む。
+      __sandbox_git_prompt() {
+        local ref dirty=""
+        ref="$(git symbolic-ref --short HEAD 2>/dev/null)" ||
+          ref="$(git rev-parse --short HEAD 2>/dev/null)" || return 0
+        # 未コミットの変更（未追跡ファイルを含む）があれば赤い * を付ける
+        if [ -n "$(git status --porcelain --ignore-submodules=dirty 2>/dev/null | head -n 1)" ]; then
+          dirty=$' \001\e[31m\002*\001\e[32m\002'
+        fi
+        printf '\001\e[32m\002[%s%s]\001\e[0m\002' "$ref" "$dirty"
+      }
+      PS1='\[\e]0;\w\a\]\[\e[0m\e[37m\][\w]\[\e[0m\] $(__sandbox_git_prompt)\n\[\e[34m\]->\[\e[1;34m\] \$\[\e[0m\] '
 
   # --- draw.io Desktop のヘッドレス実行ラッパー --------------------------------
   # --- Skill の復旧（gh auth login 後に 1 回実行する）-------------------------
