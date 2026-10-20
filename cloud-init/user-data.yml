@@ -296,8 +296,8 @@ write_files:
           "$(cat "$HOME/.codex/config.toml")" > "$HOME/.codex/config.toml"
       fi
 
-      # Claude Code: link.sh が配布先として認識するよう skills ディレクトリだけ作る
-      mkdir -p "$HOME/.claude/skills"
+      # Claude Code / OpenCode: link.sh が配布先として認識するよう skills ディレクトリだけ作る
+      mkdir -p "$HOME/.claude/skills" "$HOME/.config/opencode/skills"
 
       touch "$MARKER"
       echo "[sandbox] done. open a new shell or run 'source ~/.bashrc' to use the tools."
@@ -378,7 +378,8 @@ write_files:
         mkdir -p "$(dirname "$DEST")"
         git clone --recurse-submodules https://github.com/bigdragon0610/agent-skills.git "$DEST"
       fi
-      mkdir -p "$HOME/.kiro/skills" "$HOME/.claude/skills" "$HOME/.codex/skills"
+      mkdir -p "$HOME/.kiro/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" \
+        "$HOME/.config/opencode/skills"
       "$DEST/scripts/link.sh"
 
   - path: /usr/local/bin/drawio

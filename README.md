@@ -344,7 +344,7 @@ orb restart sandbox
 
 ### Skill の復旧
 
-`gh auth login` の後に 1 回実行する。`bigdragon0610/agent-skills` を `~/ryudai/agent-skills` へ clone（既にあれば pull）し、`link.sh` で Kiro / Claude Code / Codex の `skills` へ symlink を張る。
+`gh auth login` の後に 1 回実行する。`bigdragon0610/agent-skills` を `~/ryudai/agent-skills` へ clone（既にあれば pull）し、`link.sh` で Kiro / Claude Code / Codex / OpenCode の `skills` へ symlink を張る。
 
 ```bash
 gh auth login
