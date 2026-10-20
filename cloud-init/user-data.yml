@@ -296,6 +296,19 @@ write_files:
           "$(cat "$HOME/.codex/config.toml")" > "$HOME/.codex/config.toml"
       fi
 
+      # OpenCode: すべてのツール操作を確認なしで許可する（既存の設定があれば触らない）
+      mkdir -p "$HOME/.config/opencode"
+      if [ ! -e "$HOME/.config/opencode/opencode.jsonc" ] && [ ! -e "$HOME/.config/opencode/opencode.json" ]; then
+        cat > "$HOME/.config/opencode/opencode.jsonc" <<'JSONEOF'
+      {
+        "$schema": "https://opencode.ai/config.json",
+        // 既定ポリシーは `*` を allow 済みだが `*.env` の read だけ ask になるため、
+        // 全体 allow を後ろに重ねて ask を消す（後勝ち）
+        "permissions": [{ "action": "*", "resource": "*", "effect": "allow" }]
+      }
+      JSONEOF
+      fi
+
       # Claude Code / OpenCode: link.sh が配布先として認識するよう skills ディレクトリだけ作る
       mkdir -p "$HOME/.claude/skills" "$HOME/.config/opencode/skills"
 
