@@ -75,7 +75,7 @@ orb -m sandbox          # シェルに入る
 ssh sandbox@orb         # SSH
 ```
 
-OrbStack は cloud-init の**後**に「macOS ユーザー名のユーザー」を作成する。そのため mise / Node / npm 製 CLI / Claude Code / Kiro CLI といったユーザー固有ツールは、cloud-init ではなく**初回ログイン時にそのユーザー自身で自動導入**される（ネットワーク経由のダウンロードのため数分かかる）。apt パッケージ・gh・mo・draw.io・AWS CLI・Docker は cloud-init の boot 時にシステム全体へ導入済み。
+OrbStack は cloud-init の**後**に「macOS ユーザー名のユーザー」を作成する。そのため mise / Node / npm 製 CLI / Claude Code / Kiro CLI / OpenCode といったユーザー固有ツールは、cloud-init ではなく**初回ログイン時にそのユーザー自身で自動導入**される（ネットワーク経由のダウンロードのため数分かかる）。apt パッケージ・gh・mo・draw.io・AWS CLI・Docker は cloud-init の boot 時にシステム全体へ導入済み。
 
 ### 4. プロビジョニング完了の確認
 
@@ -172,7 +172,7 @@ Skill（`bigdragon0610/agent-skills`）の作業に必要なものと、開発�
 | Node / Python ツール | node (LTS), uv, codex, playwright-cli | mise |
 | エディタ | neovim, typescript 6, typescript-language-server | apt / mise |
 | Codex のサンドボックス | bubblewrap | apt |
-| エージェント | Claude Code, Kiro CLI | 公式インストーラ |
+| エージェント | Claude Code, Kiro CLI, OpenCode | 公式インストーラ |
 | AWS / コンテナ | AWS CLI v2, Docker Engine, git-secrets | 公式 zip / 公式 apt / make install |
 
 ### mise によるバージョン管理
