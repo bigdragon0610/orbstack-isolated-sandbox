@@ -357,6 +357,7 @@ sandbox-restore-skills
 
 - **Kiro CLI**: 全ツール自動承認の `~/.kiro/agents/allAllowedTools.json` を作り、`chat.defaultAgent` に設定する。
 - **Codex**: `~/.codex/config.toml` の先頭に `approval_policy = "never"` と `sandbox_mode = "danger-full-access"` を入れる。
+- **OpenCode**: 全操作を allow する `permissions` を書いた `~/.config/opencode/opencode.jsonc` を作る（既にあれば変更しない）。
 
 エージェントが何でも実行できる前提になるため、Mac のフォルダをマウントするときは特に範囲を絞る。
 
