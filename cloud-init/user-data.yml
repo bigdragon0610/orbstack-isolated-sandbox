@@ -18,7 +18,8 @@
 #   - ユーザー固有ツール … 初回ログイン時にログインユーザー自身で導入
 #       mise（ランタイム/CLI のバージョン管理。宣言は /etc/mise/config.toml）
 #         -> node, uv, codex, playwright-cli
-#       playwright 用 Chromium, Claude Code (公式installer), Kiro CLI (zip),
+#       playwright 用 Chromium, Claude Code (公式installer), OpenCode (公式installer),
+#       Kiro CLI (zip),
 #       neovim 設定 (bigdragon0610/nvim-config を clone + sandbox 専用の上書き)
 #
 #   ※ OrbStack は cloud-init の後に「macOSユーザー名のユーザー」を作成するため、
@@ -125,6 +126,15 @@ write_files:
 
       # Claude Code（公式ネイティブインストーラ -> ~/.local/bin）
       curl -fsSL https://claude.ai/install.sh | bash
+
+      # OpenCode（公式インストーラ -> ~/.opencode/bin）。インストーラの PATH 追記は
+      # Kiro CLI の post block より後ろに入り、非対話シェルにも効かないため自前で行う
+      curl -fsSL https://opencode.ai/v2/install | bash -s -- --no-modify-path
+      for rc in "$HOME/.profile" "$HOME/.bashrc"; do
+        if ! grep -q '.opencode/bin' "$rc" 2>/dev/null; then
+          echo 'export PATH="$HOME/.opencode/bin:$PATH"' >> "$rc"
+        fi
+      done
 
       # Kiro CLI（zip インストーラ -> ~/.local/bin。.deb は amd64 専用のため zip を使う）
       case "$(uname -m)" in
